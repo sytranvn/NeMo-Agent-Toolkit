@@ -29,7 +29,8 @@ from nat.data_models.component_ref import EmbedderRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.component_ref import RetrieverRef
 from nat.data_models.function import FunctionBaseConfig
-from nat.plugins.vanna.db_utils import RequiredSecretStr
+from nat.plugins.vanna.db_utils import RequiredSecretStr, SupportedDatabase
+from nat.plugins.vanna.vanna_utils import TrainingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class Text2SQLConfig(FunctionBaseConfig, name="text2sql"):
 
     # Database configuration
     database_type: str = Field(default="databricks",
-                               description="Database type (currently only 'databricks' is supported)")
+                               description="Database type (e.g. 'databricks', 'postgresql')")
     connection_url: RequiredSecretStr = Field(description="Database connection string")
 
     # Vanna Milvus configuration
@@ -72,11 +73,7 @@ class Text2SQLConfig(FunctionBaseConfig, name="text2sql"):
     # Vanna configuration
     allow_llm_to_see_data: bool = Field(default=False, description="Allow LLM to see data for intermediate queries")
     execute_sql: bool = Field(default=False, description="Execute SQL or just return query string")
-    train_on_startup: bool = Field(default=False, description="Train Vanna on startup")
-    auto_training: bool = Field(default=False,
-                                description=("Auto-train Vanna (auto-extract DDL and generate training data "
-                                             "from database) or manually train Vanna (uses training data from "
-                                             "training_db_schema.py)"))
+    training_config: TrainingConfig = Field(description="Configuration to train Vanna")
     initial_prompt: str | None = Field(default=None, description="Custom system prompt")
     n_results: int = Field(default=5, description="Number of similar examples")
     sql_collection: str = Field(default="vanna_sql", description="Milvus collection for SQL examples")
@@ -146,13 +143,11 @@ async def text2sql(config: Text2SQLConfig, builder: Builder):
             milvus_search_limit=config.milvus_search_limit,
             reasoning_models=config.reasoning_models,
             chat_models=config.chat_models,
-            create_collections=config.train_on_startup,
+            create_collections=config.training_config.on_startup,
         )
 
     # Validate database type
-    if config.database_type.lower() != "databricks":
-        msg = f"Only Databricks is currently supported. Got database_type: {config.database_type}"
-        raise ValueError(msg)
+    _ = SupportedDatabase(config.database_type.lower())
 
     # Setup database connection (Engine stored in vanna_instance.db_engine)
     setup_vanna_db_connection(
@@ -162,8 +157,8 @@ async def text2sql(config: Text2SQLConfig, builder: Builder):
     )
 
     # Train on startup if configured
-    if config.train_on_startup:
-        await train_vanna(vanna_instance, auto_train=config.auto_training)
+    if config.training_config.on_startup:
+        await train_vanna(vanna_instance, config=config.training_config)
 
     # Streaming version
     async def _generate_sql_stream(question: str, ) -> AsyncGenerator[ResponseIntermediateStep | Text2SQLOutput, None]:
@@ -238,7 +233,7 @@ async def text2sql(config: Text2SQLConfig, builder: Builder):
     description = ("Generate SQL queries from natural language questions using AI. "
                    "Leverages similar question-SQL pairs, DDL information, and "
                    "documentation to generate accurate SQL queries. "
-                   "Currently supports Databricks only.")
+                   "Currently supports Databricks and PostgreSQL.")
 
     if config.execute_sql:
         description += " Also executes queries and returns results."

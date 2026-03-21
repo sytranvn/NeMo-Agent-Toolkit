@@ -18,11 +18,14 @@ import json
 import logging
 import uuid
 
-from nat.plugins.vanna.training_db_schema import VANNA_RESPONSE_GUIDELINES
-from nat.plugins.vanna.training_db_schema import VANNA_TRAINING_DDL
+from pydantic import BaseModel, Field
+
+from nat.plugins.vanna.db_utils import SupportedDatabase
+from nat.plugins.vanna.training_db_schema import VANNA_ACTIVE_TABLES, VANNA_RESPONSE_GUIDELINES, VANNA_TRAINING_DDL
 from nat.plugins.vanna.training_db_schema import VANNA_TRAINING_DOCUMENTATION
 from nat.plugins.vanna.training_db_schema import VANNA_TRAINING_EXAMPLES
 from nat.plugins.vanna.training_db_schema import VANNA_TRAINING_PROMPT
+
 from vanna.legacy.base import VannaBase
 from vanna.legacy.milvus import Milvus_VectorStore
 
@@ -757,7 +760,37 @@ class VannaSingleton:
         cls._instance = None
 
 
-async def train_vanna(vn: VannaLangChain, auto_train: bool = False):
+class TrainingConfig(BaseModel):
+    """
+    Training configuration with Vanna integration.
+    """
+    on_startup: bool = Field(default=False, description="Train Vanna on startup")
+    auto: bool = Field(
+        default=False,
+        description=(
+            "Auto-train Vanna (auto-extract DDL and generate training data "
+            "from database) or manually train Vanna (uses training data from "
+            "training_db_schema.py)"
+        ),
+    )
+    active_tables: list[str] = Field(
+        default_factory=lambda: VANNA_ACTIVE_TABLES,
+        description="Tables to train (overrides VANNA_ACTIVE_TABLES if provided)",
+    )
+    documents: list[str] = Field(
+        default_factory=lambda: VANNA_TRAINING_DOCUMENTATION,
+        description="Documentations of the database (overrides VANNA_TRAINING_DOCUMENTATION if provided)",
+    )
+    ddls: list[str] = Field(
+        default_factory=lambda: VANNA_TRAINING_DDL,
+        description="Table DDLs to manually add schema (overrides default DDL if provided)",
+    )
+    examples: list[dict] = Field(
+        default_factory=lambda: VANNA_TRAINING_EXAMPLES,
+        description="Manual question-SQL examples (overrides VANNA_TRAINING_EXAMPLES if provided)",
+    )
+
+async def train_vanna(vn: VannaLangChain, config: TrainingConfig):
     """Train Vanna with DDL, documentation, and question-SQL examples.
 
     Args:
@@ -767,40 +800,49 @@ async def train_vanna(vn: VannaLangChain, auto_train: bool = False):
     logger.info("Training Vanna...")
 
     # Train with DDL
-    if auto_train:
-        from nat.plugins.vanna.training_db_schema import VANNA_ACTIVE_TABLES
-
-        dialect = vn.dialect.lower()
+    if config.auto:
+        dialect = SupportedDatabase(vn.dialect.lower())
         ddls = []
 
-        if dialect == 'databricks':
-            for table in VANNA_ACTIVE_TABLES:
+        if dialect == SupportedDatabase.DATABRICKS:
+            for table in config.active_tables:
                 ddl_sql = f"SHOW CREATE TABLE {table}"
                 ddl = await vn.run_sql(ddl_sql)
                 ddl = ddl.to_string()  # Convert DataFrame to string
                 ddls.append(ddl)
+        elif dialect == SupportedDatabase.POSTGRESQL:
+            for table in config.active_tables:
+                ddl_sql = f"""
+                    SELECT column_name, data_type, character_maximum_length, is_nullable, column_default
+                    FROM information_schema.columns
+                    WHERE table_name = '{table}'
+                    ORDER BY ordinal_position;
+                """
+                ddl = await vn.run_sql(ddl_sql)
+                ddl = ddl.to_string()  # Convert DataFrame to string
+                ddls.append(ddl)
+
         else:
-            error_msg = (f"Auto-extraction of DDL is currently only supported for Databricks. "
+            error_msg = (f"Auto-extraction of DDL is currently only supported for Databricks and PostgreSQL. "
                          f"Current dialect: {vn.dialect}. "
-                         "Please either set auto_train=False or use 'databricks' as the dialect.")
+                         "Please either set auto_train=False or use one of supported dialect.")
             logger.error(error_msg)
             raise NotImplementedError(error_msg)
     else:
-        ddls = VANNA_TRAINING_DDL
+        ddls = config.ddls
 
     for ddl in ddls:
         await vn.add_ddl(ddl=ddl)
 
     # Train with documentation
-    for doc in VANNA_TRAINING_DOCUMENTATION:
+    for doc in config.documents:
         await vn.add_documentation(documentation=doc)
 
     # Train with examples
     # Add manual examples
-    examples = []
-    examples.extend(VANNA_TRAINING_EXAMPLES)
+    examples = config.examples[:]
 
-    if auto_train:
+    if config.auto:
         logger.info("Generating training examples with LLM...")
         # Retrieve relevant context in parallel
         retrieval_tasks = [vn.get_related_record(vn.ddl_collection), vn.get_related_record(vn.doc_collection)]

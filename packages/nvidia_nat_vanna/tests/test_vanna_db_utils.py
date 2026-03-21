@@ -118,29 +118,60 @@ class TestConnectToDatabricks:
             connect_to_databricks("invalid://url")
 
 
+class TestConnectToPostgreSQL:
+    """Test PostgreSQL connection."""
+
+    @patch("sqlalchemy.create_engine")
+    def test_connection_error_propagation(self, mock_create_engine):
+        """Test connection errors are properly propagated."""
+        mock_create_engine.side_effect = ValueError("Invalid connection string")
+
+        with pytest.raises(ValueError, match="Invalid connection string"):
+            connect_to_postgresql("invalid://url")
+
+
 class TestConnectToDatabase:
     """Test database connection."""
 
+    @patch("nat.plugins.vanna.db_utils.connect_to_postgresql")
     @patch("nat.plugins.vanna.db_utils.connect_to_databricks")
     @pytest.mark.parametrize(
-        "db_type",
-        ["databricks", "DATABRICKS", SupportedDatabase.DATABRICKS],
-        ids=["lowercase_string", "uppercase_string", "enum"],
+        "db_type, mock_connector_name",
+        [
+            pytest.param("databricks", "connect_to_databricks", id="databricks_lowercase_string"),
+            pytest.param("DATABRICKS", "connect_to_databricks", id="databricks_uppercase_string"),
+            pytest.param(SupportedDatabase.DATABRICKS, "connect_to_databricks", id="databricks_enum"),
+            pytest.param("postgresql", "connect_to_postgresql", id="postgresql_lowercase_string"),
+            pytest.param("POSTGRESQL", "connect_to_postgresql", id="postgresql_uppercase_string"),
+            pytest.param(SupportedDatabase.POSTGRESQL, "connect_to_postgresql", id="postgresql_enum"),
+        ],
     )
-    def test_databricks_connection(self, mock_databricks, db_type):
-        """Test connection with various databricks type formats."""
-        mock_connection = MagicMock()
-        mock_databricks.return_value = mock_connection
+    def test_supported_database_connection(self, mock_connect_to_postgresql, mock_connect_to_databricks, db_type, mock_connector_name):
+        """Test connection with various supported database type formats."""
+        mock_connector = None
+        if mock_connector_name == "connect_to_databricks":
+            mock_connector = mock_connect_to_databricks
+        elif mock_connector_name == "connect_to_postgresql":
+            mock_connector = mock_connect_to_postgresql
 
-        result = connect_to_database(db_type, "databricks://token@host/db")
+        mock_connection = MagicMock()
+        mock_connector.return_value = mock_connection
+
+        # The connection_url should be generic as we are testing the routing logic here
+        result = connect_to_database(db_type, "test://connection_url")
         assert result == mock_connection
-        mock_databricks.assert_called_once_with(connection_url="databricks://token@host/db")
+        mock_connector.assert_called_once_with(connection_url="test://connection_url")
+
+        # Ensure the other mock was not called
+        if mock_connector_name == "connect_to_databricks":
+            mock_connect_to_postgresql.assert_not_called()
+        else:
+            mock_connect_to_databricks.assert_not_called()
 
     @pytest.mark.parametrize(
         "invalid_type,expected_msg",
         [
             ("mysql", "Unsupported database type: 'mysql'"),
-            ("postgres", "Unsupported database type: 'postgres'"),
             ("", "Unsupported database type: ''"),
         ],
     )

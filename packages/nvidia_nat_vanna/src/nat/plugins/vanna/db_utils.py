@@ -42,6 +42,7 @@ class SupportedDatabase(StrEnum):
     """Supported database types for Vanna text-to-SQL."""
 
     DATABRICKS = "databricks"
+    POSTGRESQL = "postgresql"
 
 
 class QueryResult(BaseModel):
@@ -159,6 +160,18 @@ def connect_to_databricks(connection_url: str) -> Any:
         logger.error(f"Failed to connect to Databricks: {e}")
         raise
 
+def connect_to_postgresql(connection_url: str) -> Any:
+    try:
+        from sqlalchemy import create_engine
+
+        connection = create_engine(url=connection_url, echo=False)
+        logger.info("Connected to PostgreSQL")
+        return connection
+    except Exception as e:
+        logger.error(f"Failed to connect to PostgreSQL: {e}")
+        raise
+
+
 
 def connect_to_database(
     database_type: str | SupportedDatabase,
@@ -194,6 +207,9 @@ def connect_to_database(
     # Route to appropriate database connector
     if db_type == SupportedDatabase.DATABRICKS:
         return connect_to_databricks(connection_url=connection_url)
+    if db_type == SupportedDatabase.POSTGRESQL:
+        return connect_to_postgresql(connection_url=connection_url)
+
 
     # This should never be reached if enum is properly defined
     msg = f"Database type '{db_type.value}' has no connector implementation"

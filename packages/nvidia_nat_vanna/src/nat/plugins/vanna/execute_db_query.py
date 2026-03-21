@@ -27,7 +27,7 @@ from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
 from nat.data_models.api_server import ResponseIntermediateStep
 from nat.data_models.function import FunctionBaseConfig
-from nat.plugins.vanna.db_utils import RequiredSecretStr
+from nat.plugins.vanna.db_utils import RequiredSecretStr, SupportedDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class ExecuteDBQueryConfig(FunctionBaseConfig, name="execute_db_query"):
 
     # Database configuration
     database_type: str = Field(default="databricks",
-                               description="Database type (currently only 'databricks' is supported)")
+                               description="Database type (e.g. 'databricks', 'postgresql')")
     connection_url: RequiredSecretStr = Field(description="Database connection string")
 
     # Query configuration
@@ -126,10 +126,13 @@ async def execute_db_query(
             )
 
             # Validate database type
-            if config.database_type.lower() != "databricks":
+            try:
+                db_type = SupportedDatabase(config.database_type.lower())
+            except ValueError:
+                supported_db_types = ", ".join([f"'{db.value}'" for db in SupportedDatabase])
                 yield ExecuteDBQueryOutput(
                     success=False,
-                    failure_reason=f"Only Databricks is currently supported. Got database_type: {config.database_type}",
+                    failure_reason=f"Unsupported database type: '{config.database_type}'. Supported types: {supported_db_types}",
                     sql_query=sql_query,
                     dataframe_info=DataFrameInfo(shape=[0, 0], dtypes={}, columns=[]),
                 )
