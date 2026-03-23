@@ -29,7 +29,8 @@ from nat.data_models.component_ref import EmbedderRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.component_ref import RetrieverRef
 from nat.data_models.function import FunctionBaseConfig
-from nat.plugins.vanna.db_utils import RequiredSecretStr, SupportedDatabase
+from nat.plugins.vanna.db_utils import RequiredSecretStr
+from nat.plugins.vanna.db_utils import SupportedDatabase
 from nat.plugins.vanna.vanna_utils import TrainingConfig
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,7 @@ class Text2SQLConfig(FunctionBaseConfig, name="text2sql"):
                                            "MUST be configured with use_async_client=true for text2sql function.")
 
     # Database configuration
-    database_type: str = Field(default="databricks",
-                               description="Database type (e.g. 'databricks', 'postgresql')")
+    database_type: str = Field(default="databricks", description="Database type (e.g. 'databricks', 'postgresql')")
     connection_url: RequiredSecretStr = Field(description="Database connection string")
 
     # Vanna Milvus configuration
@@ -186,9 +186,10 @@ async def text2sql(config: Text2SQLConfig, builder: Builder):
 
             sql = str(sql_result.get("sql", ""))
             explanation: str | None = sql_result.get("explanation")
+            is_valid_sql = vanna_instance.is_sql_valid(sql)
 
             # If execute_sql is enabled, run the query
-            if config.execute_sql:
+            if config.execute_sql and is_valid_sql:
                 yield ResponseIntermediateStep(
                     id=str(uuid.uuid4()),
                     parent_id=parent_id,
